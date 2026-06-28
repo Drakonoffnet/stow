@@ -1,4 +1,28 @@
 [package]
 name = "file_transfer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+name = "file_transfer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "file_transfer"
+path = "src/main.rs"
+
+[dependencies]
+# Ядро
+rayon = "1.10"
+flate2 = "1.0"
+crc32fast = "1.4"
+sha2 = "0.10"
+walkdir = "2.5"
+thiserror = "1.0"
+num_cpus = "1.16"
+crossbeam-channel = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# GUI
+eframe = "0.31"
+egui = "0.31"
