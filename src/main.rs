@@ -26,8 +26,8 @@ use theme::{
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([760.0, 660.0])
-            .with_min_inner_size([600.0, 520.0]),
+            .with_inner_size([820.0, 700.0])
+            .with_min_inner_size([560.0, 520.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -83,6 +83,9 @@ struct App {
 
     source_rect: egui::Rect,
     dest_rect: egui::Rect,
+    // Last pointer position while files were hovered — the OS may clear the
+    // pointer position on the drop frame, so we remember the hover location.
+    drop_pos: Option<egui::Pos2>,
 }
 
 impl App {
@@ -111,6 +114,7 @@ impl App {
             log: Vec::new(),
             source_rect: egui::Rect::NOTHING,
             dest_rect: egui::Rect::NOTHING,
+            drop_pos: None,
         }
     }
 
@@ -156,8 +160,18 @@ impl App {
         if dropped.is_empty() {
             return;
         }
-        let pos = ctx.input(|i| i.pointer.latest_pos());
+        // Use the remembered hover position; fall back to the current pointer.
+        let pos = self.drop_pos.or_else(|| ctx.input(|i| i.pointer.latest_pos()));
         let to_dest = pos.map(|p| self.dest_rect.contains(p)).unwrap_or(false);
+        eprintln!(
+            "[DROP] pos={:?} drop_pos={:?} latest={:?} dest_rect={:?} src_rect={:?} -> to_dest={}",
+            pos,
+            self.drop_pos,
+            ctx.input(|i| i.pointer.latest_pos()),
+            self.dest_rect,
+            self.source_rect,
+            to_dest
+        );
 
         for path in dropped {
             if !path.is_dir() {
@@ -315,12 +329,13 @@ impl App {
     fn destination_column(&mut self, ui: &mut egui::Ui, hovering: bool, pointer: Option<egui::Pos2>) {
         ui.horizontal(|ui| {
             ui.label(bold("DESTINATION", 11.0, MUTED));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let sel = if self.dest_kind == DestKind::Local { 0 } else { 1 };
-                if let Some(i) = segmented(ui, &["Local", "SSH"], sel, false) {
-                    self.dest_kind = if i == 0 { DestKind::Local } else { DestKind::Ssh };
-                }
-            });
+            // Push the compact toggle to the right edge (a stretched right_to_left
+            // frame would expand the pill across the whole row).
+            ui.add_space((ui.available_width() - 118.0).max(0.0));
+            let sel = if self.dest_kind == DestKind::Local { 0 } else { 1 };
+            if let Some(i) = segmented(ui, &["Local", "SSH"], sel, false) {
+                self.dest_kind = if i == 0 { DestKind::Local } else { DestKind::Ssh };
+            }
         });
         ui.add_space(4.0);
 
@@ -509,10 +524,20 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
-        self.handle_drops(ctx);
 
         let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
-        let pointer = ctx.input(|i| i.pointer.latest_pos());
+        // Track the hover position while a drag is in progress, so the drop
+        // frame (where the OS may report no pointer) still knows the target.
+        if hovering {
+            let (hp, lp) = ctx.input(|i| (i.pointer.hover_pos(), i.pointer.latest_pos()));
+            eprintln!("[HOVER] hover_pos={hp:?} latest_pos={lp:?}");
+            if let Some(p) = hp.or(lp) {
+                self.drop_pos = Some(p);
+            }
+        }
+
+        self.handle_drops(ctx);
+        let pointer = self.drop_pos.or_else(|| ctx.input(|i| i.pointer.latest_pos()));
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::WIN_BG).inner_margin(Margin::same(18)))
@@ -523,10 +548,18 @@ impl eframe::App for App {
                         ui.label(extra("Pack folders into zip and move", 19.0, INK));
                         ui.add_space(16.0);
 
-                        ui.columns(2, |cols| {
-                            self.source_column(&mut cols[0], hovering, pointer);
-                            self.destination_column(&mut cols[1], hovering, pointer);
-                        });
+                        // Two columns when wide; stack vertically when narrow
+                        // (the design wraps the columns below ~640px).
+                        if ui.available_width() >= 660.0 {
+                            ui.columns(2, |cols| {
+                                self.source_column(&mut cols[0], hovering, pointer);
+                                self.destination_column(&mut cols[1], hovering, pointer);
+                            });
+                        } else {
+                            self.source_column(ui, hovering, pointer);
+                            ui.add_space(12.0);
+                            self.destination_column(ui, hovering, pointer);
+                        }
 
                         ui.add_space(14.0);
                         separator(ui);
@@ -546,9 +579,9 @@ impl eframe::App for App {
 impl App {
     fn actions_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.checkbox(&mut self.remove_source, med("Remove source after success", 13.0, INK2));
-            ui.add_space(8.0);
-            ui.checkbox(&mut self.checksum, med("sha256", 13.0, INK2));
+            check(ui, &mut self.remove_source, "Remove source after success");
+            ui.add_space(14.0);
+            check(ui, &mut self.checksum, "sha256");
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let can_start = self.can_start();
@@ -558,13 +591,19 @@ impl App {
                     if can_start { Color32::WHITE } else { MUTED_SOFT },
                 ))
                 .fill(if can_start { ACCENT } else { SURFACE2 })
-                .corner_radius(CornerRadius::same(10))
+                .corner_radius(CornerRadius::same(11))
                 .stroke(Stroke::NONE)
-                .min_size(Vec2::new(0.0, 38.0));
+                .min_size(Vec2::new(128.0, 44.0));
                 if ui.add_enabled(can_start, start).clicked() {
                     self.start_jobs();
                 }
-                if !self.sources.is_empty() && ui.add(ghost("Clear sources")).clicked() {
+                ui.add_space(8.0);
+                let clear = egui::Button::new(bold("Clear sources", 13.0, MUTED))
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(CornerRadius::same(11))
+                    .min_size(Vec2::new(0.0, 44.0));
+                if !self.sources.is_empty() && ui.add(clear).clicked() {
                     self.sources.clear();
                 }
             });
@@ -698,19 +737,17 @@ fn segmented(ui: &mut egui::Ui, options: &[&str], selected: usize, fill_width: b
             let seg_w = if fill_width {
                 (ui.available_width() - 2.0 * options.len() as f32) / options.len() as f32
             } else {
-                0.0
+                54.0
             };
-            ui.horizontal(|ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 for (i, label) in options.iter().enumerate() {
                     let on = i == selected;
                     let txt = semi(*label, 12.0, if on { INK } else { MUTED });
-                    let mut btn = egui::Button::new(txt)
+                    let btn = egui::Button::new(txt)
                         .fill(if on { SURFACE } else { Color32::TRANSPARENT })
                         .corner_radius(CornerRadius::same(7))
-                        .stroke(Stroke::NONE);
-                    if fill_width {
-                        btn = btn.min_size(Vec2::new(seg_w.max(1.0), 24.0));
-                    }
+                        .stroke(Stroke::NONE)
+                        .min_size(Vec2::new(seg_w.max(1.0), 24.0));
                     if ui.add(btn).clicked() {
                         clicked = Some(i);
                     }
@@ -768,6 +805,10 @@ fn small_ghost(ui: &mut egui::Ui, text: &str) -> bool {
         .stroke(Stroke::new(1.0, LINE))
         .corner_radius(CornerRadius::same(7));
     ui.add(btn).clicked()
+}
+
+fn check(ui: &mut egui::Ui, value: &mut bool, label: &str) {
+    ui.checkbox(value, med(label, 13.0, INK));
 }
 
 fn separator(ui: &mut egui::Ui) {

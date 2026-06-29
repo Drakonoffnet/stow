@@ -32,6 +32,14 @@ pub const DZ: Color32 = Color32::from_rgb(0xFB, 0xFA, 0xF6);
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
+    // egui's default proportional fallback chain (includes emoji fonts) — appended
+    // to every Manrope weight so icon glyphs still resolve in bold/semibold text.
+    let fallback: Vec<String> = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+
     let faces = [
         ("mr-regular", include_bytes!("../assets/fonts/Manrope-Regular.ttf").as_slice()),
         ("mr-medium", include_bytes!("../assets/fonts/Manrope-Medium.ttf").as_slice()),
@@ -59,9 +67,9 @@ pub fn install_fonts(ctx: &egui::Context) {
         ("bold", "mr-bold"),
         ("extrabold", "mr-extrabold"),
     ] {
-        fonts
-            .families
-            .insert(FontFamily::Name(fam.into()), vec![face.to_owned()]);
+        let mut chain = vec![face.to_owned()];
+        chain.extend(fallback.iter().cloned());
+        fonts.families.insert(FontFamily::Name(fam.into()), chain);
     }
 
     ctx.set_fonts(fonts);
