@@ -1,11 +1,12 @@
-//! Параллельная упаковка папки в ZIP.
+//! Parallel packing of a directory into a ZIP.
 //!
-//! Каждый файл сжимается независимым потоком raw-deflate (метод 8) в общем
-//! пуле `rayon`, после чего записи последовательно собираются в корректный
-//! ZIP-контейнер. Имена пишутся в UTF-8 (флаг 0x0800) — корректно для кириллицы.
+//! Each file is compressed by an independent raw-deflate task (method 8) in a
+//! shared `rayon` pool, after which the entries are assembled sequentially into
+//! a valid ZIP container. Names are written in UTF-8 (flag 0x0800), which is
+//! correct for non-ASCII characters such as Cyrillic.
 //!
-//! Ограничения MVP: стандартный ZIP без ZIP64 (файлы и архив < 4 ГБ),
-//! пустые каталоги не сохраняются. См. `docs/design.md`, риск R1.
+//! MVP limitations: standard ZIP without ZIP64 (files and archive below 4 GB),
+//! and empty directories are not preserved. See `docs/design.md`, risk R1.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -25,16 +26,16 @@ const UTF8_FLAG: u16 = 0x0800;
 const METHOD_DEFLATE: u16 = 8;
 const VERSION_NEEDED: u16 = 20;
 
-/// Один файл, уже сжатый в памяти и готовый к записи в контейнер.
+/// A single file, already compressed in memory and ready to write to the container.
 struct PreparedEntry {
-    /// Имя внутри архива (с прямыми слэшами, включая корневую папку).
+    /// Name inside the archive (with forward slashes, including the root directory).
     name: String,
     compressed: Vec<u8>,
     crc32: u32,
     uncompressed_size: u32,
 }
 
-/// Собрать список файлов источника (без каталогов).
+/// Collect the list of source files (excluding directories).
 fn collect_files(source: &Path) -> Result<Vec<std::path::PathBuf>, CoreError> {
     if !source.is_dir() {
         return Err(CoreError::NotADirectory(source.to_path_buf()));
@@ -53,7 +54,7 @@ fn collect_files(source: &Path) -> Result<Vec<std::path::PathBuf>, CoreError> {
     Ok(files)
 }
 
-/// Имя записи в архиве: `<корневая папка>/<путь относительно источника>`.
+/// Entry name inside the archive: `<root directory>/<path relative to source>`.
 fn entry_name(source: &Path, file: &Path) -> String {
     let root = source
         .file_name()
@@ -64,7 +65,7 @@ fn entry_name(source: &Path, file: &Path) -> String {
     format!("{root}/{rel}")
 }
 
-/// Сжать один файл в raw-deflate, посчитать CRC32.
+/// Compress a single file with raw deflate and compute its CRC32.
 fn prepare_entry(
     source: &Path,
     file: &Path,
@@ -89,13 +90,13 @@ fn prepare_entry(
     })
 }
 
-/// Упаковать папку `source` в файл `out`.
+/// Pack the directory `source` into the file `out`.
 ///
-/// * `level` — уровень Deflate (0..=9).
-/// * `cancel` — флаг отмены, проверяется между файлами.
-/// * `on_file_done` — вызывается после сжатия каждого файла (для прогресса).
+/// * `level` — the Deflate level (0..=9).
+/// * `cancel` — the cancellation flag, checked between files.
+/// * `on_file_done` — invoked after each file is compressed (for progress).
 ///
-/// Возвращает число упакованных файлов.
+/// Returns the number of packed files.
 pub fn archive_dir(
     source: &Path,
     out: &Path,
@@ -105,8 +106,8 @@ pub fn archive_dir(
 ) -> Result<u64, CoreError> {
     let files = collect_files(source)?;
 
-    // Параллельное сжатие. collect в Result<_> короткозамыкает на первой ошибке
-    // (включая отмену), не дожидаясь остальных файлов.
+    // Parallel compression. Collecting into a Result short-circuits on the first
+    // error (including cancellation) without waiting for the remaining files.
     let entries: Vec<PreparedEntry> = files
         .par_iter()
         .map(|file| {
@@ -123,18 +124,18 @@ pub fn archive_dir(
     Ok(entries.len() as u64)
 }
 
-/// Число файлов в источнике — для отображения общего прогресса.
+/// Number of files in the source — used to display the total progress.
 pub fn count_files(source: &Path) -> Result<u64, CoreError> {
     Ok(collect_files(source)?.len() as u64)
 }
 
-/// Последовательная сборка ZIP-контейнера из готовых записей.
+/// Sequential assembly of the ZIP container from the prepared entries.
 fn write_zip(out: &Path, entries: &[PreparedEntry]) -> Result<(), CoreError> {
     let file = std::fs::File::create(out)?;
     let mut w = std::io::BufWriter::new(file);
     let mut offset: u32 = 0;
 
-    // Смещения локальных заголовков — нужны для центральной директории.
+    // Offsets of the local headers — required for the central directory.
     let mut local_offsets = Vec::with_capacity(entries.len());
 
     for e in entries {
@@ -158,7 +159,7 @@ fn write_zip(out: &Path, entries: &[PreparedEntry]) -> Result<(), CoreError> {
         offset += e.compressed.len() as u32;
     }
 
-    // Центральная директория.
+    // Central directory.
     let cd_start = offset;
     let mut cd_size: u32 = 0;
     for (e, &local_off) in entries.iter().zip(local_offsets.iter()) {

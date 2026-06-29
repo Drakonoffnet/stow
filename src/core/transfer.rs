@@ -1,8 +1,9 @@
-//! Бэкенды назначения. MVP: локальная/сетевая папка.
+//! Destination backends. MVP: local/network directory.
 //!
-//! Контракт [`Destination`] одинаков для будущих SSH/S3 (этап 2): сначала
-//! получить путь для временной записи ([`Destination::stage`]), затем
-//! атомарно финализировать ([`Destination::finalize`]).
+//! The [`Destination`] contract is the same for future SSH/S3 backends
+//! (phase 2): first obtain a path for the temporary write
+//! ([`Destination::stage`]), then finalize atomically
+//! ([`Destination::finalize`]).
 
 use std::path::{Path, PathBuf};
 
@@ -10,16 +11,16 @@ use crate::core::error::CoreError;
 use crate::core::model::DestinationSpec;
 
 pub trait Destination: Send + Sync {
-    /// Путь, куда писать архив на время упаковки (рядом с финальным —
-    /// чтобы финализация была атомарным переименованием).
+    /// Path to write the archive to while packing (next to the final path so
+    /// that finalization is an atomic rename).
     fn stage(&self, name: &str) -> Result<PathBuf, CoreError>;
 
-    /// Переместить готовый временный архив `staged` в финальное место под
-    /// именем `name`. Возвращает финальный путь. Перезапись запрещена.
+    /// Move the finished temporary archive `staged` to its final location under
+    /// the name `name`. Returns the final path. Overwriting is forbidden.
     fn finalize(&self, staged: &Path, name: &str) -> Result<PathBuf, CoreError>;
 }
 
-/// Локальная или смонтированная сетевая папка.
+/// Local or mounted network directory.
 pub struct LocalDestination {
     pub dir: PathBuf,
 }
@@ -39,13 +40,13 @@ impl Destination for LocalDestination {
         if final_path.exists() {
             return Err(CoreError::DestinationExists(name.to_string()));
         }
-        // На одном томе rename атомарен — архив появляется целиком.
+        // On a single volume the rename is atomic — the archive appears whole.
         std::fs::rename(staged, &final_path)?;
         Ok(final_path)
     }
 }
 
-/// Построить бэкенд назначения по спецификации.
+/// Build a destination backend from its specification.
 pub fn build(spec: &DestinationSpec) -> Box<dyn Destination> {
     match spec {
         DestinationSpec::Local { dir } => {

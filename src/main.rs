@@ -1,7 +1,8 @@
-//! GUI-слой `file_transfer` (egui/eframe).
+//! GUI layer of `file_transfer` (egui/eframe).
 //!
-//! Две зоны drag-and-drop: «Источник» (папки для упаковки) и «Назначение»
-//! (папка для готовых архивов). Тяжёлая работа — в ядре (`file_transfer` lib).
+//! Two drag-and-drop zones: "Source" (folders to pack) and "Destination"
+//! (folder for the finished archives). The heavy work lives in the core
+//! (`file_transfer` lib).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,13 +21,13 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "file_transfer — упаковка и перемещение",
+        "file_transfer — pack and move",
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
 }
 
-/// Отображаемое состояние одной задачи.
+/// Displayed state of a single job.
 struct JobView {
     id: JobId,
     title: String,
@@ -45,7 +46,7 @@ struct App {
     jobs: Vec<JobView>,
     log: Vec<String>,
 
-    // Прямоугольники зон с прошлого кадра — чтобы понять, куда бросили.
+    // Zone rectangles from the previous frame — used to tell where a drop landed.
     source_rect: egui::Rect,
     dest_rect: egui::Rect,
 }
@@ -101,7 +102,7 @@ impl App {
         }
     }
 
-    /// Принять брошенные файлы, разложив по зонам.
+    /// Accept dropped files and sort them into the zones.
     fn handle_drops(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -119,7 +120,7 @@ impl App {
         for path in dropped {
             if !path.is_dir() {
                 self.log
-                    .push(format!("пропущено (не папка): {}", path.display()));
+                    .push(format!("skipped (not a folder): {}", path.display()));
                 continue;
             }
             if to_dest {
@@ -152,7 +153,7 @@ impl eframe::App for App {
         let pointer = ctx.input(|i| i.pointer.latest_pos());
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Упаковка папок в zip и перемещение");
+            ui.heading("Pack folders into zip and move");
             ui.add_space(6.0);
 
             ui.columns(2, |cols| {
@@ -160,8 +161,8 @@ impl eframe::App for App {
                     && pointer.map(|p| self.source_rect.contains(p)).unwrap_or(false);
                 self.source_rect = drop_zone(
                     &mut cols[0],
-                    "Источник",
-                    "Перетащите сюда папки для упаковки",
+                    "Source",
+                    "Drop folders to pack here",
                     &self.sources,
                     src_hi,
                 );
@@ -171,8 +172,8 @@ impl eframe::App for App {
                 let dest_lines: Vec<PathBuf> = self.dest.clone().into_iter().collect();
                 self.dest_rect = drop_zone(
                     &mut cols[1],
-                    "Назначение",
-                    "Перетащите сюда папку для архивов",
+                    "Destination",
+                    "Drop the folder for archives here",
                     &dest_lines,
                     dst_hi,
                 );
@@ -180,7 +181,7 @@ impl eframe::App for App {
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.remove_source, "Удалить источник после успеха");
+                ui.checkbox(&mut self.remove_source, "Remove source after success");
                 ui.checkbox(&mut self.checksum, "sha256");
             });
 
@@ -188,24 +189,24 @@ impl eframe::App for App {
             let can_start = self.dest.is_some() && !self.sources.is_empty();
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(can_start, egui::Button::new("▶ Старт"))
+                    .add_enabled(can_start, egui::Button::new("▶ Start"))
                     .clicked()
                 {
                     self.start_jobs();
                 }
-                if !self.sources.is_empty() && ui.button("Очистить источники").clicked() {
+                if !self.sources.is_empty() && ui.button("Clear sources").clicked() {
                     self.sources.clear();
                 }
             });
 
             ui.separator();
-            ui.label("Задачи:");
+            ui.label("Jobs:");
             egui::ScrollArea::vertical()
                 .max_height(220.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if self.jobs.is_empty() {
-                        ui.weak("пока нет задач");
+                        ui.weak("no jobs yet");
                     }
                     for job in &self.jobs {
                         render_job(ui, job);
@@ -214,7 +215,7 @@ impl eframe::App for App {
 
             if !self.log.is_empty() {
                 ui.separator();
-                ui.label("Лог:");
+                ui.label("Log:");
                 egui::ScrollArea::vertical()
                     .id_salt("log")
                     .max_height(120.0)
@@ -230,7 +231,7 @@ impl eframe::App for App {
     }
 }
 
-/// Нарисовать зону drag-drop, вернуть её прямоугольник (для определения цели).
+/// Draw a drag-and-drop zone and return its rectangle (used to detect the target).
 fn drop_zone(
     ui: &mut egui::Ui,
     title: &str,
@@ -273,7 +274,7 @@ fn render_job(ui: &mut egui::Ui, job: &JobView) {
     });
     match &job.status {
         JobStatus::Queued => {
-            ui.weak("в очереди…");
+            ui.weak("queued…");
         }
         JobStatus::Archiving { done, total } => {
             let frac = if *total > 0 {
@@ -282,16 +283,16 @@ fn render_job(ui: &mut egui::Ui, job: &JobView) {
                 0.0
             };
             ui.add(
-                egui::ProgressBar::new(frac).text(format!("сжатие {done}/{total}")),
+                egui::ProgressBar::new(frac).text(format!("packing {done}/{total}")),
             );
         }
         JobStatus::Transferring => {
-            ui.add(egui::ProgressBar::new(0.99).text("перемещение…"));
+            ui.add(egui::ProgressBar::new(0.99).text("moving…"));
         }
         JobStatus::Done { output, sha256 } => {
             ui.colored_label(
                 egui::Color32::from_rgb(80, 200, 120),
-                format!("✔ готово: {}", output.display()),
+                format!("✔ done: {}", output.display()),
             );
             if let Some(h) = sha256 {
                 ui.monospace(format!("sha256: {h}"));
@@ -301,7 +302,7 @@ fn render_job(ui: &mut egui::Ui, job: &JobView) {
             ui.colored_label(egui::Color32::from_rgb(230, 100, 100), format!("✘ {error}"));
         }
         JobStatus::Canceled => {
-            ui.weak("отменено");
+            ui.weak("canceled");
         }
     }
     ui.add_space(4.0);

@@ -1,7 +1,7 @@
-//! Ядро `file_transfer`: архивация (параллельный zip) + перемещение в назначение.
+//! Core of `file_transfer`: archiving (parallel zip) plus delivery to a destination.
 //!
-//! Слой не зависит от GUI — общение с интерфейсом идёт через каналы
-//! ([`Command`]/[`Event`]) движка [`engine::Engine`].
+//! The layer does not depend on the GUI — it communicates with the interface
+//! through the channels ([`Command`]/[`Event`]) of the [`engine::Engine`].
 
 pub mod core;
 

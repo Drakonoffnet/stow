@@ -1,5 +1,5 @@
-//! Сквозной тест движка: постановка задачи → события прогресса → готовый
-//! архив в назначении. Проверяет потоковую обвязку, которую запускает GUI.
+//! End-to-end engine test: submit a job → progress events → finished archive
+//! in the destination. Exercises the threading wiring that the GUI drives.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ fn submit_produces_archive_in_destination() {
         checksum: true,
     });
 
-    // Ждём Finished для нашей задачи (с таймаутом).
+    // Wait for Finished for our job (with a timeout).
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut output = None;
     let mut sha = None;
@@ -45,7 +45,7 @@ fn submit_produces_archive_in_destination() {
                         output = Some(o);
                         sha = sha256;
                     }
-                    other => panic!("ожидался Done, получено: {other:?}"),
+                    other => panic!("expected Done, got: {other:?}"),
                 }
                 break;
             }
@@ -54,12 +54,12 @@ fn submit_produces_archive_in_destination() {
         }
     }
 
-    let output = output.expect("задача не завершилась за таймаут");
-    assert!(output.exists(), "архив не создан: {}", output.display());
+    let output = output.expect("the job did not finish within the timeout");
+    assert!(output.exists(), "archive was not created: {}", output.display());
     assert!(output.extension().unwrap() == "zip");
-    assert!(src.exists(), "источник не должен удаляться");
-    let sha = sha.expect("sha256 запрошен, но отсутствует");
-    assert_eq!(sha.len(), 64, "sha256 должен быть 64 hex-символа");
+    assert!(src.exists(), "the source must not be removed");
+    let sha = sha.expect("sha256 was requested but is missing");
+    assert_eq!(sha.len(), 64, "sha256 must be 64 hex characters");
 
     std::fs::remove_dir_all(&base).ok();
 }
@@ -92,7 +92,7 @@ fn missing_source_reports_failure() {
             }
         }
     }
-    assert!(failed, "несуществующий источник должен дать Failed");
+    assert!(failed, "a missing source must produce Failed");
 
     std::fs::remove_dir_all(&base).ok();
 }

@@ -1,11 +1,11 @@
-//! Генерация имени архива: `<имя_папки>_<YYYY-MM-DD_HHMMSS>.zip`.
+//! Archive name generation: `<folder_name>_<YYYY-MM-DD_HHMMSS>.zip`.
 
 use std::path::Path;
 
-/// Имя выходного архива для папки-источника на момент `now`.
+/// Output archive name for the source directory at the moment `now`.
 ///
-/// Метка времени до секунды делает коллизии практически невозможными,
-/// поэтому перезапись не требуется (см. требование об именовании).
+/// A timestamp down to the second makes collisions practically impossible,
+/// so overwriting is not required (see the naming requirement).
 pub fn archive_name(source: &Path, now: chrono::DateTime<chrono::Local>) -> String {
     let stem = source
         .file_name()

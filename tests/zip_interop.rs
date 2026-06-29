@@ -1,5 +1,6 @@
-//! Проверка совместимости самописного ZIP с системной утилитой `unzip`
-//! и round-trip содержимого (включая кириллические имена и вложенность).
+//! Verify that the hand-written ZIP is compatible with the system tools and
+//! that the content round-trips. The fixture deliberately uses Cyrillic names
+//! and nesting to exercise UTF-8 filename handling.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,35 +14,35 @@ fn unique_dir(tag: &str) -> PathBuf {
 
 #[test]
 fn archive_opens_with_system_unzip_and_roundtrips() {
-    // unzip есть на macOS/Linux по умолчанию; на других платформах — пропуск.
+    // `unzip` ships with macOS/Linux by default; skip on other platforms.
     if Command::new("unzip").arg("-v").output().is_err() {
-        eprintln!("unzip недоступен — тест пропущен");
+        eprintln!("unzip is unavailable — test skipped");
         return;
     }
 
     let base = unique_dir("interop");
     let src = base.join("данные");
     std::fs::create_dir_all(src.join("вложенная")).unwrap();
-    std::fs::write(src.join("привет.txt"), "содержимое файла раз").unwrap();
+    std::fs::write(src.join("привет.txt"), "file content one").unwrap();
     std::fs::write(src.join("вложенная/file two.bin"), vec![7u8; 5000]).unwrap();
 
     let zip = base.join("out.zip");
     let cancel = AtomicBool::new(false);
     let n = archive_dir(&src, &zip, 6, &cancel, || {}).unwrap();
-    assert_eq!(n, 2, "должно быть упаковано 2 файла");
+    assert_eq!(n, 2, "two files should be packed");
 
-    // 1. Целостность по мнению системного unzip.
+    // 1. Integrity according to the system `unzip`.
     let test = Command::new("unzip").arg("-t").arg(&zip).output().unwrap();
     assert!(
         test.status.success(),
-        "unzip -t завершился с ошибкой: {}",
+        "unzip -t failed: {}",
         String::from_utf8_lossy(&test.stderr)
     );
 
-    // 2. Распаковка и сверка содержимого.
-    //    Для извлечения берём UTF-8-совместимый инструмент: на macOS — `ditto`
-    //    (штатный, уважает UTF-8-флаг), иначе — `unzip`. Старый Info-ZIP `unzip`
-    //    в macOS не декодирует UTF-8-имена, поэтому для round-trip он не годится.
+    // 2. Extraction and content comparison.
+    //    Use a UTF-8-aware tool for extraction: on macOS, `ditto` (built in,
+    //    honors the UTF-8 flag); otherwise `unzip`. The legacy Info-ZIP `unzip`
+    //    on macOS does not decode UTF-8 names, so it is unsuitable for round-trip.
     let out = base.join("extracted");
     std::fs::create_dir_all(&out).unwrap();
 
@@ -63,12 +64,12 @@ fn archive_opens_with_system_unzip_and_roundtrips() {
     };
     assert!(
         extract.status.success(),
-        "извлечение не удалось: {}",
+        "extraction failed: {}",
         String::from_utf8_lossy(&extract.stderr)
     );
 
     let got = std::fs::read_to_string(out.join("данные/привет.txt")).unwrap();
-    assert_eq!(got, "содержимое файла раз");
+    assert_eq!(got, "file content one");
     let bin = std::fs::read(out.join("данные/вложенная/file two.bin")).unwrap();
     assert_eq!(bin, vec![7u8; 5000]);
 

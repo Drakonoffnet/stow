@@ -1,8 +1,9 @@
-//! Движок: очередь задач, пул воркеров, события прогресса.
+//! Engine: job queue, worker pool, progress events.
 //!
-//! GUI-слой никогда не блокируется: вся тяжёлая работа идёт в воркерах,
-//! наружу отдаются только [`Event`]. После каждого события вызывается
-//! `wake` — колбэк пробуждения интерфейса (в GUI это `ctx.request_repaint`).
+//! The GUI layer never blocks: all heavy work runs in the workers, and only
+//! [`Event`] values are emitted outward. After every event the engine calls
+//! `wake` — a callback that wakes the interface (in the GUI it is
+//! `ctx.request_repaint`).
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -19,7 +20,7 @@ use crate::core::model::{Config, JobId, JobSpec, JobStatus};
 use crate::core::naming::archive_name;
 use crate::core::transfer;
 
-/// Команда движку (для каналоориентированных вызывающих).
+/// Command to the engine (for channel-oriented callers).
 #[derive(Debug)]
 pub enum Command {
     Submit(JobSpec),
@@ -27,7 +28,7 @@ pub enum Command {
     Shutdown,
 }
 
-/// Событие движка для GUI.
+/// Engine event for the GUI.
 #[derive(Debug, Clone)]
 pub enum Event {
     Accepted { id: JobId, source: std::path::PathBuf },
@@ -36,7 +37,7 @@ pub enum Event {
     Finished { id: JobId, status: JobStatus },
 }
 
-/// Внутреннее представление задачи в очереди.
+/// Internal representation of a queued job.
 struct Job {
     id: JobId,
     spec: JobSpec,
@@ -56,8 +57,8 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Запустить движок: пул из `cfg.jobs` воркеров. События идут в `evt_tx`,
-    /// `wake` вызывается после каждого события.
+    /// Start the engine: a pool of `cfg.jobs` workers. Events go to `evt_tx`,
+    /// and `wake` is called after every event.
     pub fn start(cfg: Config, evt_tx: Sender<Event>, wake: Wake) -> Engine {
         let (job_tx, job_rx) = unbounded::<Job>();
         let mut workers = Vec::with_capacity(cfg.jobs);
@@ -85,7 +86,7 @@ impl Engine {
         }
     }
 
-    /// Поставить задачу в очередь. Возвращает её идентификатор.
+    /// Enqueue a job. Returns its identifier.
     pub fn submit(&self, spec: JobSpec) -> JobId {
         let id = JobId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -106,25 +107,25 @@ impl Engine {
         id
     }
 
-    /// Отменить задачу (если ещё не завершена).
+    /// Cancel a job (if it has not finished yet).
     pub fn cancel(&self, id: JobId) {
         if let Some(flag) = self.flags.lock().unwrap().get(&id.0) {
             flag.store(true, Ordering::Relaxed);
         }
     }
 
-    /// Унифицированная обработка команды.
+    /// Unified command handling.
     pub fn handle(&self, cmd: Command) {
         match cmd {
             Command::Submit(spec) => {
                 self.submit(spec);
             }
             Command::Cancel(id) => self.cancel(id),
-            Command::Shutdown => { /* выполняется в Drop */ }
+            Command::Shutdown => { /* performed in Drop */ }
         }
     }
 
-    /// Уровень сжатия движка.
+    /// The engine's compression level.
     pub fn compression_level(&self) -> u32 {
         self.level
     }
@@ -132,7 +133,7 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        // Закрываем очередь — воркеры до-обрабатывают и выходят.
+        // Close the queue — the workers finish draining and exit.
         self.job_tx.take();
         for w in self.workers.drain(..) {
             let _ = w.join();
@@ -140,7 +141,7 @@ impl Drop for Engine {
     }
 }
 
-/// Выполнить одну задачу целиком.
+/// Run a single job from start to finish.
 fn run_job(job: Job, evt_tx: &Sender<Event>, wake: &Wake, level: u32) {
     let id = job.id;
     let result = process(&job, evt_tx, wake, level);
@@ -158,7 +159,7 @@ fn run_job(job: Job, evt_tx: &Sender<Event>, wake: &Wake, level: u32) {
             wake,
             Event::Log {
                 id: Some(id),
-                line: format!("{id} ошибка: {error}"),
+                line: format!("{id} error: {error}"),
             },
         );
     }
@@ -188,7 +189,7 @@ fn process(
     let dest = transfer::build(&job.spec.destination);
     let staged = dest.stage(&name)?;
 
-    // Сжатие с прогрессом по файлам.
+    // Compression with per-file progress.
     let done = AtomicU64::new(0);
     let archive_result = archive::archive_dir(source, &staged, level, &job.cancel, || {
         let d = done.fetch_add(1, Ordering::Relaxed) + 1;
@@ -212,7 +213,7 @@ fn process(
         return Err(CoreError::Canceled);
     }
 
-    // Контрольная сумма (опционально) — по временно́му файлу до перемещения.
+    // Checksum (optional) — computed on the staged file before the move.
     let sha256 = if job.spec.checksum {
         Some(compute_sha256(&staged)?)
     } else {
@@ -238,7 +239,7 @@ fn process(
         wake,
         Event::Log {
             id: Some(id),
-            line: format!("{id} готово: {}", output.display()),
+            line: format!("{id} done: {}", output.display()),
         },
     );
     Ok((output, sha256))

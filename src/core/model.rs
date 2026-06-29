@@ -1,8 +1,8 @@
-//! Модель данных ядра: задачи, статусы, конфигурация.
+//! Core data model: jobs, statuses, configuration.
 
 use std::path::PathBuf;
 
-/// Идентификатор задачи (монотонно растёт в движке).
+/// Job identifier (increases monotonically in the engine).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(pub u64);
 
@@ -12,27 +12,27 @@ impl std::fmt::Display for JobId {
     }
 }
 
-/// Назначение, выбранное пользователем. Расширяется под SSH/S3 (этап 2).
+/// Destination chosen by the user. Extended for SSH/S3 (phase 2).
 #[derive(Debug, Clone)]
 pub enum DestinationSpec {
-    /// Локальная или смонтированная сетевая папка (SMB/NFS как путь).
+    /// Local or mounted network directory (SMB/NFS as a path).
     Local { dir: PathBuf },
 }
 
-/// Описание одной задачи: что упаковать и куда положить.
+/// Description of a single job: what to archive and where to place it.
 #[derive(Debug, Clone)]
 pub struct JobSpec {
-    /// Папка-источник.
+    /// Source directory.
     pub source: PathBuf,
-    /// Куда переместить готовый архив.
+    /// Where to move the finished archive.
     pub destination: DestinationSpec,
-    /// Удалить источник после успешной упаковки и перемещения.
+    /// Remove the source after a successful archive and move.
     pub remove_source: bool,
-    /// Посчитать sha256 готового архива.
+    /// Compute the sha256 of the finished archive.
     pub checksum: bool,
 }
 
-/// Текущее состояние задачи.
+/// Current state of a job.
 #[derive(Debug, Clone)]
 pub enum JobStatus {
     Queued,
@@ -48,12 +48,12 @@ pub enum JobStatus {
     Canceled,
 }
 
-/// Параметры движка.
+/// Engine parameters.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Сколько архивов обрабатывать одновременно (по умолчанию = число ядер).
+    /// How many archives to process concurrently (defaults to the CPU count).
     pub jobs: usize,
-    /// Уровень сжатия Deflate (0..=9). Фиксировано 6 в MVP.
+    /// Deflate compression level (0..=9). Fixed at 6 in the MVP.
     pub compression_level: u32,
 }
 

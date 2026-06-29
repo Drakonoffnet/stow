@@ -1,18 +1,18 @@
-//! Типы ошибок ядра.
+//! Core error types.
 
 use std::path::PathBuf;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CoreError {
-    #[error("ошибка ввода-вывода: {0}")]
+    #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("источник не является папкой: {0}")]
+    #[error("source is not a directory: {0}")]
     NotADirectory(PathBuf),
 
-    #[error("назначение уже содержит файл: {0}")]
+    #[error("destination already contains the file: {0}")]
     DestinationExists(String),
 
-    #[error("операция отменена")]
+    #[error("operation canceled")]
     Canceled,
 }

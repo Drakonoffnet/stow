@@ -1,4 +1,4 @@
-//! Внутренние модули ядра.
+//! Internal core modules.
 
 pub mod archive;
 pub mod engine;
