@@ -274,13 +274,27 @@ impl App {
                 let dst_hi = hovering
                     && pointer.map(|p| self.dest_rect.contains(p)).unwrap_or(false);
                 let dest_lines: Vec<PathBuf> = self.dest.clone().into_iter().collect();
-                self.dest_rect = drop_zone(
+                let (rect, remove) = drop_zone(
                     ui,
                     "Destination",
                     "Drop the folder for archives here",
                     &dest_lines,
                     dst_hi,
                 );
+                self.dest_rect = rect;
+                if remove.is_some() {
+                    self.dest = None;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("📂 Choose folder…").clicked() {
+                        if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                            self.dest = Some(d);
+                        }
+                    }
+                    if self.dest.is_some() && ui.button("Clear").clicked() {
+                        self.dest = None;
+                    }
+                });
             }
             DestKind::Ssh => {
                 // No drop target in SSH mode — keep drops going to the source list.
@@ -358,15 +372,31 @@ impl eframe::App for App {
             ui.add_space(6.0);
 
             ui.columns(2, |cols| {
-                let src_hi = hovering
-                    && pointer.map(|p| self.source_rect.contains(p)).unwrap_or(false);
-                self.source_rect = drop_zone(
-                    &mut cols[0],
-                    "Source",
-                    "Drop folders to pack here",
-                    &self.sources,
-                    src_hi,
-                );
+                {
+                    let ui = &mut cols[0];
+                    let src_hi = hovering
+                        && pointer.map(|p| self.source_rect.contains(p)).unwrap_or(false);
+                    let (rect, remove) = drop_zone(
+                        ui,
+                        "Source",
+                        "Drop folders to pack here",
+                        &self.sources,
+                        src_hi,
+                    );
+                    self.source_rect = rect;
+                    if let Some(i) = remove {
+                        self.sources.remove(i);
+                    }
+                    if ui.button("➕ Add folders…").clicked() {
+                        if let Some(dirs) = rfd::FileDialog::new().pick_folders() {
+                            for d in dirs {
+                                if d.is_dir() && !self.sources.contains(&d) {
+                                    self.sources.push(d);
+                                }
+                            }
+                        }
+                    }
+                }
 
                 self.destination_column(&mut cols[1], hovering, pointer);
             });
@@ -436,14 +466,18 @@ impl eframe::App for App {
     }
 }
 
-/// Draw a drag-and-drop zone and return its rectangle (used to detect the target).
+/// Draw a drag-and-drop zone with a remove button per item.
+///
+/// Returns the zone rectangle (used to detect the drop target) and the index
+/// of an item the user asked to remove, if any.
 fn drop_zone(
     ui: &mut egui::Ui,
     title: &str,
     hint: &str,
     items: &[PathBuf],
     highlight: bool,
-) -> egui::Rect {
+) -> (egui::Rect, Option<usize>) {
+    let mut remove = None;
     let stroke = if highlight {
         egui::Stroke::new(2.0, egui::Color32::from_rgb(90, 170, 255))
     } else {
@@ -460,16 +494,21 @@ fn drop_zone(
         if items.is_empty() {
             ui.weak(hint);
         } else {
-            for p in items {
-                let name = p
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| p.display().to_string());
-                ui.label(format!("📁 {name}"));
+            for (i, p) in items.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                    let name = p
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| p.display().to_string());
+                    ui.label(format!("📁 {name}"));
+                });
             }
         }
     });
-    resp.response.rect
+    (resp.response.rect, remove)
 }
 
 /// Render a single job. Returns `true` if the user requested cancellation.
