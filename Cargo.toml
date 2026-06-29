@@ -23,6 +23,10 @@ num_cpus = "1.16"
 crossbeam-channel = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+# Phase 2: SSH/SCP destination and secret storage
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+keyring = { version = "3", features = ["apple-native"] }
+
 # GUI
 eframe = "0.31"
 egui = "0.31"

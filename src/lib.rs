@@ -8,5 +8,5 @@ pub mod core;
 pub use crate::core::engine::{Command, Engine, Event};
 pub use crate::core::error::CoreError;
 pub use crate::core::model::{
-    Config, DestinationSpec, JobId, JobSpec, JobStatus,
+    Config, DestinationSpec, JobId, JobSpec, JobStatus, SshAuth, SshConfig,
 };

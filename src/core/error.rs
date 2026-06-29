@@ -15,4 +15,13 @@ pub enum CoreError {
 
     #[error("operation canceled")]
     Canceled,
+
+    #[error("SSH error: {0}")]
+    Ssh(String),
+
+    #[error("SSH authentication failed: {0}")]
+    Auth(String),
+
+    #[error("keychain error: {0}")]
+    Secret(String),
 }

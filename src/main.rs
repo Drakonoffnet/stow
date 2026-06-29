@@ -1,8 +1,8 @@
 //! GUI layer of `file_transfer` (egui/eframe).
 //!
-//! Two drag-and-drop zones: "Source" (folders to pack) and "Destination"
-//! (folder for the finished archives). The heavy work lives in the core
-//! (`file_transfer` lib).
+//! A "Source" drag-and-drop zone for folders to pack, and a destination that is
+//! either a local folder (drag-and-drop) or an SSH/SFTP target configured in a
+//! form. The heavy work lives in the core (`file_transfer` lib).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,13 +11,16 @@ use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
 
 use file_transfer::core::engine::Event;
-use file_transfer::{Config, DestinationSpec, Engine, JobId, JobSpec, JobStatus};
+use file_transfer::core::secret;
+use file_transfer::{
+    Config, DestinationSpec, Engine, JobId, JobSpec, JobStatus, SshAuth, SshConfig,
+};
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([720.0, 560.0])
-            .with_min_inner_size([520.0, 420.0]),
+            .with_inner_size([760.0, 640.0])
+            .with_min_inner_size([560.0, 480.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -25,6 +28,21 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
+}
+
+/// Destination kind selected in the UI.
+#[derive(PartialEq, Clone, Copy)]
+enum DestKind {
+    Local,
+    Ssh,
+}
+
+/// SSH authentication method selected in the UI.
+#[derive(PartialEq, Clone, Copy)]
+enum AuthKind {
+    Agent,
+    Password,
+    Key,
 }
 
 /// Displayed state of a single job.
@@ -39,9 +57,19 @@ struct App {
     events: Receiver<Event>,
 
     sources: Vec<PathBuf>,
-    dest: Option<PathBuf>,
     remove_source: bool,
     checksum: bool,
+
+    // Destination.
+    dest_kind: DestKind,
+    dest: Option<PathBuf>, // local folder
+    ssh_host: String,
+    ssh_port: String,
+    ssh_user: String,
+    ssh_remote_dir: String,
+    ssh_auth: AuthKind,
+    ssh_secret: String, // password or key passphrase; saved to the keychain on start
+    ssh_key_path: String,
 
     jobs: Vec<JobView>,
     log: Vec<String>,
@@ -62,9 +90,17 @@ impl App {
             engine,
             events: evt_rx,
             sources: Vec::new(),
-            dest: None,
             remove_source: false,
             checksum: false,
+            dest_kind: DestKind::Local,
+            dest: None,
+            ssh_host: String::new(),
+            ssh_port: "22".to_string(),
+            ssh_user: String::new(),
+            ssh_remote_dir: String::new(),
+            ssh_auth: AuthKind::Agent,
+            ssh_secret: String::new(),
+            ssh_key_path: String::new(),
             jobs: Vec::new(),
             log: Vec::new(),
             source_rect: egui::Rect::NOTHING,
@@ -102,7 +138,7 @@ impl App {
         }
     }
 
-    /// Accept dropped files and sort them into the zones.
+    /// Accept dropped folders into the source list, or the local destination.
     fn handle_drops(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -131,15 +167,180 @@ impl App {
         }
     }
 
+    /// Build the destination spec from the current form, storing any secret in
+    /// the keychain. Returns a human-readable error on invalid input.
+    fn build_destination(&self) -> Result<DestinationSpec, String> {
+        match self.dest_kind {
+            DestKind::Local => {
+                let dir = self.dest.clone().ok_or("no destination folder")?;
+                Ok(DestinationSpec::Local { dir })
+            }
+            DestKind::Ssh => {
+                let host = self.ssh_host.trim();
+                let user = self.ssh_user.trim();
+                let remote = self.ssh_remote_dir.trim();
+                if host.is_empty() || user.is_empty() || remote.is_empty() {
+                    return Err("host, user and remote directory are required".into());
+                }
+                let port: u16 = if self.ssh_port.trim().is_empty() {
+                    22
+                } else {
+                    self.ssh_port
+                        .trim()
+                        .parse()
+                        .map_err(|_| "invalid port".to_string())?
+                };
+                let account = format!("{user}@{host}:{port}");
+                let auth = match self.ssh_auth {
+                    AuthKind::Agent => SshAuth::Agent,
+                    AuthKind::Password => {
+                        if self.ssh_secret.is_empty() {
+                            return Err("password is empty".into());
+                        }
+                        secret::store(&account, &self.ssh_secret).map_err(|e| e.to_string())?;
+                        SshAuth::Password {
+                            keychain_account: account,
+                        }
+                    }
+                    AuthKind::Key => {
+                        if self.ssh_key_path.trim().is_empty() {
+                            return Err("key file path is required".into());
+                        }
+                        let passphrase_account = if self.ssh_secret.is_empty() {
+                            None
+                        } else {
+                            let acc = format!("{account}/key");
+                            secret::store(&acc, &self.ssh_secret).map_err(|e| e.to_string())?;
+                            Some(acc)
+                        };
+                        SshAuth::Key {
+                            path: PathBuf::from(self.ssh_key_path.trim()),
+                            passphrase_account,
+                        }
+                    }
+                };
+                Ok(DestinationSpec::Ssh(SshConfig {
+                    host: host.to_string(),
+                    port,
+                    user: user.to_string(),
+                    remote_dir: remote.to_string(),
+                    auth,
+                }))
+            }
+        }
+    }
+
+    fn can_start(&self) -> bool {
+        if self.sources.is_empty() {
+            return false;
+        }
+        match self.dest_kind {
+            DestKind::Local => self.dest.is_some(),
+            DestKind::Ssh => {
+                !self.ssh_host.trim().is_empty()
+                    && !self.ssh_user.trim().is_empty()
+                    && !self.ssh_remote_dir.trim().is_empty()
+                    && (self.ssh_auth != AuthKind::Key || !self.ssh_key_path.trim().is_empty())
+            }
+        }
+    }
+
     fn start_jobs(&mut self) {
-        let Some(dir) = self.dest.clone() else { return };
+        let dest = match self.build_destination() {
+            Ok(d) => d,
+            Err(e) => {
+                self.log.push(format!("destination error: {e}"));
+                return;
+            }
+        };
         for source in std::mem::take(&mut self.sources) {
             self.engine.submit(JobSpec {
                 source,
-                destination: DestinationSpec::Local { dir: dir.clone() },
+                destination: dest.clone(),
                 remove_source: self.remove_source,
                 checksum: self.checksum,
             });
+        }
+    }
+
+    fn destination_column(&mut self, ui: &mut egui::Ui, hovering: bool, pointer: Option<egui::Pos2>) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.dest_kind, DestKind::Local, "Local");
+            ui.selectable_value(&mut self.dest_kind, DestKind::Ssh, "SSH");
+        });
+
+        match self.dest_kind {
+            DestKind::Local => {
+                let dst_hi = hovering
+                    && pointer.map(|p| self.dest_rect.contains(p)).unwrap_or(false);
+                let dest_lines: Vec<PathBuf> = self.dest.clone().into_iter().collect();
+                self.dest_rect = drop_zone(
+                    ui,
+                    "Destination",
+                    "Drop the folder for archives here",
+                    &dest_lines,
+                    dst_hi,
+                );
+            }
+            DestKind::Ssh => {
+                // No drop target in SSH mode — keep drops going to the source list.
+                self.dest_rect = egui::Rect::NOTHING;
+                self.ssh_form(ui);
+            }
+        }
+    }
+
+    fn ssh_form(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("ssh_form")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Host");
+                ui.text_edit_singleline(&mut self.ssh_host);
+                ui.end_row();
+
+                ui.label("Port");
+                ui.text_edit_singleline(&mut self.ssh_port);
+                ui.end_row();
+
+                ui.label("User");
+                ui.text_edit_singleline(&mut self.ssh_user);
+                ui.end_row();
+
+                ui.label("Remote dir");
+                ui.text_edit_singleline(&mut self.ssh_remote_dir);
+                ui.end_row();
+            });
+
+        ui.horizontal(|ui| {
+            ui.label("Auth:");
+            ui.selectable_value(&mut self.ssh_auth, AuthKind::Agent, "Agent");
+            ui.selectable_value(&mut self.ssh_auth, AuthKind::Password, "Password");
+            ui.selectable_value(&mut self.ssh_auth, AuthKind::Key, "Key");
+        });
+
+        match self.ssh_auth {
+            AuthKind::Agent => {
+                ui.weak("Uses the running SSH agent.");
+            }
+            AuthKind::Password => {
+                ui.horizontal(|ui| {
+                    ui.label("Password");
+                    ui.add(egui::TextEdit::singleline(&mut self.ssh_secret).password(true));
+                });
+                ui.weak("Saved to the macOS Keychain on start.");
+            }
+            AuthKind::Key => {
+                ui.horizontal(|ui| {
+                    ui.label("Key file");
+                    ui.text_edit_singleline(&mut self.ssh_key_path);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Passphrase");
+                    ui.add(egui::TextEdit::singleline(&mut self.ssh_secret).password(true));
+                });
+                ui.weak("Passphrase is optional; saved to the Keychain if set.");
+            }
         }
     }
 }
@@ -167,16 +368,7 @@ impl eframe::App for App {
                     src_hi,
                 );
 
-                let dst_hi = hovering
-                    && pointer.map(|p| self.dest_rect.contains(p)).unwrap_or(false);
-                let dest_lines: Vec<PathBuf> = self.dest.clone().into_iter().collect();
-                self.dest_rect = drop_zone(
-                    &mut cols[1],
-                    "Destination",
-                    "Drop the folder for archives here",
-                    &dest_lines,
-                    dst_hi,
-                );
+                self.destination_column(&mut cols[1], hovering, pointer);
             });
 
             ui.add_space(8.0);
@@ -186,7 +378,7 @@ impl eframe::App for App {
             });
 
             ui.add_space(4.0);
-            let can_start = self.dest.is_some() && !self.sources.is_empty();
+            let can_start = self.can_start();
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(can_start, egui::Button::new("▶ Start"))
@@ -200,7 +392,15 @@ impl eframe::App for App {
             });
 
             ui.separator();
-            ui.label("Jobs:");
+            ui.horizontal(|ui| {
+                ui.label("Jobs:");
+                let has_finished = self.jobs.iter().any(|j| j.status.is_finished());
+                if has_finished && ui.button("Clear finished").clicked() {
+                    self.jobs.retain(|j| !j.status.is_finished());
+                }
+            });
+
+            let mut to_cancel: Vec<JobId> = Vec::new();
             egui::ScrollArea::vertical()
                 .max_height(220.0)
                 .auto_shrink([false, false])
@@ -209,9 +409,14 @@ impl eframe::App for App {
                         ui.weak("no jobs yet");
                     }
                     for job in &self.jobs {
-                        render_job(ui, job);
+                        if render_job(ui, job) {
+                            to_cancel.push(job.id);
+                        }
                     }
                 });
+            for id in to_cancel {
+                self.engine.cancel(id);
+            }
 
             if !self.log.is_empty() {
                 ui.separator();
@@ -267,10 +472,15 @@ fn drop_zone(
     resp.response.rect
 }
 
-fn render_job(ui: &mut egui::Ui, job: &JobView) {
+/// Render a single job. Returns `true` if the user requested cancellation.
+fn render_job(ui: &mut egui::Ui, job: &JobView) -> bool {
+    let mut cancel_requested = false;
     ui.horizontal(|ui| {
         ui.strong(&job.title);
         ui.weak(job.id.to_string());
+        if job.status.is_active() && ui.button("Cancel").clicked() {
+            cancel_requested = true;
+        }
     });
     match &job.status {
         JobStatus::Queued => {
@@ -306,4 +516,5 @@ fn render_job(ui: &mut egui::Ui, job: &JobView) {
         }
     }
     ui.add_space(4.0);
+    cancel_requested
 }
