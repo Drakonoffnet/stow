@@ -11,9 +11,9 @@
 
 set -euo pipefail
 
-APP_NAME="file_transfer"
+APP_NAME="Stow"
 BIN_NAME="file_transfer"
-BUNDLE_ID="com.filetransfer.app"
+BUNDLE_ID="com.stow.app"
 VERSION="0.1.0"
 
 cd "$(dirname "$0")/.."
@@ -62,7 +62,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key>
 	<string>$APP_NAME</string>
 	<key>CFBundleDisplayName</key>
-	<string>File Transfer</string>
+	<string>$APP_NAME</string>
 	<key>CFBundleIdentifier</key>
 	<string>$BUNDLE_ID</string>
 	<key>CFBundleVersion</key>

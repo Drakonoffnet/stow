@@ -24,7 +24,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "file_transfer — pack and move",
+        "Stow — pack and move",
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
